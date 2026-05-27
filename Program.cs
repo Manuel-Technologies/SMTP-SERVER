@@ -14,8 +14,10 @@ builder.Services.AddScoped<IEmailSender, EmailSender>();
 builder.Services.AddScoped<IApiKeyValidator, ApiKeyValidator>();
 builder.Services.AddScoped<IQuotaService, QuotaService>();
 builder.Services.AddScoped<IDomainVerificationService, DomainVerificationService>();
+builder.Services.AddHostedService<SmtpSubmissionHostedService>();
 
 builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection("Smtp"));
+builder.Services.Configure<SmtpSubmissionOptions>(builder.Configuration.GetSection("SmtpSubmission"));
 
 var app = builder.Build();
 

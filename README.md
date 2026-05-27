@@ -63,3 +63,21 @@ GET /api/usage/{tenantId}
 - Update SMTP settings in `appsettings.json` or environment variables
 - The project creates `emails.db` automatically on startup
 - Use `http://localhost:5000/swagger` to explore endpoints
+
+## SMTP submission
+
+The application also starts an authenticated SMTP submission listener. By default it listens on port `587` and uses the tenant API key as the SMTP password. The username is currently ignored.
+
+Configure the listener in `appsettings.json`:
+
+```json
+"SmtpSubmission": {
+  "ServerName": "localhost",
+  "Port": 587,
+  "RequireAuthentication": true,
+  "AllowUnsecureAuthentication": true,
+  "MaxMessageSize": 10485760
+}
+```
+
+`AllowUnsecureAuthentication` is enabled for local development only. Production submission should use TLS before clients send credentials.
