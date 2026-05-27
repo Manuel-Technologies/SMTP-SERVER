@@ -87,3 +87,18 @@ Accepted SMTP messages are stored in the `QueuedEmails` table with the raw RFC82
 ```http
 GET /api/queue
 ```
+
+## Queue worker
+
+A background worker polls queued SMTP submissions and delivers due messages through the configured outbound SMTP relay. It records successful sends in `SendEvents`, defers messages that would exceed tenant quota, and retries failed SMTP deliveries until `MaxAttempts` is reached.
+
+Configure the worker in `appsettings.json`:
+
+```json
+"QueueWorker": {
+  "Enabled": true,
+  "PollIntervalSeconds": 10,
+  "BatchSize": 10,
+  "MaxAttempts": 5
+}
+```
