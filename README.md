@@ -108,9 +108,17 @@ Accepted SMTP messages are stored in the `QueuedEmails` table with the raw RFC82
 GET /api/queue
 ```
 
+Inspect one queued message:
+
+```http
+GET /api/queue/{messageId}
+```
+
 ## Queue worker
 
-A background worker polls queued SMTP submissions and delivers due messages through the configured outbound SMTP relay. It records successful sends in `SendEvents`, defers messages that would exceed tenant quota, and retries failed SMTP deliveries until `MaxAttempts` is reached.
+A background worker polls queued SMTP submissions and delivers due messages through the configured outbound SMTP relay or direct MX delivery. It records successful sends in `SendEvents`, defers messages that would exceed tenant quota, and retries failed SMTP deliveries until `MaxAttempts` is reached.
+
+Queued messages expose a queue status and a delivery status. Queue status tracks processing state: `Queued`, `Processing`, `Deferred`, `Sent`, or `Failed`. Delivery status tracks the current delivery outcome: `Pending`, `Attempting`, `Delivered`, `Deferred`, or `Failed`, with delivery details, last delivery host, attempt count, and next retry time.
 
 Configure the worker in `appsettings.json`:
 
@@ -119,6 +127,8 @@ Configure the worker in `appsettings.json`:
   "Enabled": true,
   "PollIntervalSeconds": 10,
   "BatchSize": 10,
-  "MaxAttempts": 5
+  "MaxAttempts": 5,
+  "InitialRetryDelaySeconds": 60,
+  "MaxRetryDelayMinutes": 60
 }
 ```

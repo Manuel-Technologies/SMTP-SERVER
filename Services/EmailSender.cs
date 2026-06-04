@@ -21,7 +21,7 @@ namespace EmailServer.Services
             _dnsClient = new LookupClient();
         }
 
-        public async Task<bool> SendAsync(Tenant tenant, EmailSendRequest request)
+        public async Task<DeliveryResult> SendAsync(Tenant tenant, EmailSendRequest request)
         {
             var message = new MimeMessage();
             message.From.Add(MailboxAddress.Parse(string.IsNullOrWhiteSpace(request.From) ? _options.DefaultFrom : request.From));
@@ -38,11 +38,11 @@ namespace EmailServer.Services
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to send API email for tenant {TenantId}.", tenant.Id);
-                return false;
+                return DeliveryResult.Failed(ex.Message);
             }
         }
 
-        public async Task<bool> SendQueuedAsync(Tenant tenant, QueuedEmail queuedEmail)
+        public async Task<DeliveryResult> SendQueuedAsync(Tenant tenant, QueuedEmail queuedEmail)
         {
             try
             {
@@ -55,7 +55,7 @@ namespace EmailServer.Services
 
                 if (recipients.Count == 0)
                 {
-                    return false;
+                    return DeliveryResult.Failed("Queued message has no recipients.");
                 }
 
                 var sender = MailboxAddress.Parse(string.IsNullOrWhiteSpace(queuedEmail.From) ? _options.DefaultFrom : queuedEmail.From);
@@ -65,15 +65,15 @@ namespace EmailServer.Services
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to send queued email {MessageId} for tenant {TenantId}.", queuedEmail.Id, tenant.Id);
-                return false;
+                return DeliveryResult.Failed(ex.Message);
             }
         }
 
-        private async Task<bool> DeliverAsync(MimeMessage message, MailboxAddress sender, List<MailboxAddress> recipients)
+        private async Task<DeliveryResult> DeliverAsync(MimeMessage message, MailboxAddress sender, List<MailboxAddress> recipients)
         {
             if (recipients.Count == 0)
             {
-                return false;
+                return DeliveryResult.Failed("Message has no recipients.");
             }
 
             if (_options.UseMxLookupDelivery)
@@ -81,11 +81,10 @@ namespace EmailServer.Services
                 return await DeliverByMxAsync(message, sender, recipients);
             }
 
-            await SendViaRelayAsync(message, sender, recipients);
-            return true;
+            return await SendViaRelayAsync(message, sender, recipients);
         }
 
-        private async Task SendViaRelayAsync(MimeMessage message, MailboxAddress sender, List<MailboxAddress> recipients)
+        private async Task<DeliveryResult> SendViaRelayAsync(MimeMessage message, MailboxAddress sender, List<MailboxAddress> recipients)
         {
             using var smtp = new SmtpClient();
             smtp.LocalDomain = _options.LocalDomain;
@@ -98,9 +97,13 @@ namespace EmailServer.Services
 
             await smtp.SendAsync(FormatOptions.Default, message, sender, recipients);
             await smtp.DisconnectAsync(true);
+
+            return DeliveryResult.Delivered(
+                $"Delivered {recipients.Count} recipient(s) through relay {_options.Host}:{_options.Port}.",
+                _options.Host);
         }
 
-        private async Task<bool> DeliverByMxAsync(MimeMessage message, MailboxAddress sender, List<MailboxAddress> recipients)
+        private async Task<DeliveryResult> DeliverByMxAsync(MimeMessage message, MailboxAddress sender, List<MailboxAddress> recipients)
         {
             var recipientGroups = recipients
                 .Where(recipient => !string.IsNullOrWhiteSpace(recipient.Domain))
@@ -109,27 +112,39 @@ namespace EmailServer.Services
 
             if (recipientGroups.Count == 0)
             {
-                return false;
+                return DeliveryResult.Failed("No recipient domains were available for MX delivery.");
             }
+
+            var deliveredHosts = new List<string>();
 
             foreach (var group in recipientGroups)
             {
-                if (!await DeliverDomainGroupAsync(message, sender, group.Key, group.ToList()))
+                var result = await DeliverDomainGroupAsync(message, sender, group.Key, group.ToList());
+                if (!result.Success)
                 {
-                    return false;
+                    return result;
+                }
+
+                if (!string.IsNullOrWhiteSpace(result.Host))
+                {
+                    deliveredHosts.Add(result.Host);
                 }
             }
 
-            return true;
+            return DeliveryResult.Delivered(
+                $"Delivered {recipients.Count} recipient(s) by MX lookup across {recipientGroups.Count} domain(s).",
+                string.Join(", ", deliveredHosts));
         }
 
-        private async Task<bool> DeliverDomainGroupAsync(
+        private async Task<DeliveryResult> DeliverDomainGroupAsync(
             MimeMessage message,
             MailboxAddress sender,
             string domain,
             List<MailboxAddress> recipients)
         {
             var hosts = await GetMxHostsAsync(domain);
+            var failures = new List<string>();
+
             foreach (var host in hosts)
             {
                 try
@@ -147,15 +162,20 @@ namespace EmailServer.Services
                         host,
                         recipients.Count);
 
-                    return true;
+                    return DeliveryResult.Delivered(
+                        $"Delivered {recipients.Count} recipient(s) for {domain}.",
+                        host);
                 }
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "MX delivery attempt to {MxHost} for {Domain} failed.", host, domain);
+                    failures.Add($"{host}: {ex.Message}");
                 }
             }
 
-            return false;
+            return DeliveryResult.Failed(
+                $"MX delivery failed for {domain}. Attempts: {string.Join(" | ", failures)}",
+                string.Join(", ", hosts));
         }
 
         private async Task<List<string>> GetMxHostsAsync(string domain)

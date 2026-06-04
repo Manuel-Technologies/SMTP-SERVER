@@ -82,7 +82,7 @@ namespace EmailServer.Services
         {
             if (message.Tenant is null)
             {
-                MarkFailed(message, "Tenant was not found.");
+                MarkFailed(message, "Tenant was not found.", null);
                 await db.SaveChangesAsync(cancellationToken);
                 return;
             }
@@ -90,38 +90,41 @@ namespace EmailServer.Services
             var recipients = GetRecipients(message);
             if (recipients.Count == 0)
             {
-                MarkFailed(message, "Queued message has no recipients.");
+                MarkFailed(message, "Queued message has no recipients.", null);
                 await db.SaveChangesAsync(cancellationToken);
                 return;
             }
 
             if (!await quotaService.CanSendAsync(message.Tenant, recipients.Count))
             {
-                Defer(message, "Tenant daily quota would be exceeded.", DateTime.UtcNow.AddHours(1));
+                Defer(message, "Tenant daily quota would be exceeded.", null, DateTime.UtcNow.AddHours(1));
                 await db.SaveChangesAsync(cancellationToken);
                 return;
             }
 
             message.Status = QueuedEmailStatus.Processing;
+            message.DeliveryStatus = DeliveryStatus.Attempting;
+            message.DeliveryDetails = $"Delivery attempt {message.AttemptCount + 1} of {Math.Max(_options.MaxAttempts, 1)} started.";
+            message.LastDeliveryHost = null;
             message.AttemptCount += 1;
             message.LastAttemptAt = DateTime.UtcNow;
             message.LastError = null;
             await db.SaveChangesAsync(cancellationToken);
 
-            var sent = await sender.SendQueuedAsync(message.Tenant, message);
-            if (!sent)
+            var deliveryResult = await sender.SendQueuedAsync(message.Tenant, message);
+            if (!deliveryResult.Success)
             {
-                DateTime? nextAttempt = message.AttemptCount >= _options.MaxAttempts
+                DateTime? nextAttempt = message.AttemptCount >= Math.Max(_options.MaxAttempts, 1)
                     ? null
-                    : DateTime.UtcNow.AddMinutes(Math.Min(Math.Pow(2, message.AttemptCount), 60));
+                    : CalculateNextAttemptAt(message.AttemptCount);
 
                 if (nextAttempt is null)
                 {
-                    MarkFailed(message, "SMTP delivery failed.");
+                    MarkFailed(message, deliveryResult.Details, deliveryResult.Host);
                 }
                 else
                 {
-                    Defer(message, "SMTP delivery failed.", nextAttempt.Value);
+                    Defer(message, deliveryResult.Details, deliveryResult.Host, nextAttempt.Value);
                 }
 
                 await db.SaveChangesAsync(cancellationToken);
@@ -129,6 +132,9 @@ namespace EmailServer.Services
             }
 
             message.Status = QueuedEmailStatus.Sent;
+            message.DeliveryStatus = deliveryResult.Status;
+            message.DeliveryDetails = deliveryResult.Details;
+            message.LastDeliveryHost = deliveryResult.Host;
             message.SentAt = DateTime.UtcNow;
             message.NextAttemptAt = null;
             message.LastError = null;
@@ -157,16 +163,32 @@ namespace EmailServer.Services
                 .ToList();
         }
 
-        private static void Defer(QueuedEmail message, string reason, DateTime nextAttemptAt)
+        private DateTime CalculateNextAttemptAt(int attemptCount)
+        {
+            var initialDelay = TimeSpan.FromSeconds(Math.Max(_options.InitialRetryDelaySeconds, 1));
+            var maxDelay = TimeSpan.FromMinutes(Math.Max(_options.MaxRetryDelayMinutes, 1));
+            var multiplier = Math.Pow(2, Math.Max(attemptCount - 1, 0));
+            var delaySeconds = Math.Min(initialDelay.TotalSeconds * multiplier, maxDelay.TotalSeconds);
+
+            return DateTime.UtcNow.AddSeconds(delaySeconds);
+        }
+
+        private static void Defer(QueuedEmail message, string reason, string? host, DateTime nextAttemptAt)
         {
             message.Status = QueuedEmailStatus.Deferred;
+            message.DeliveryStatus = DeliveryStatus.Deferred;
+            message.DeliveryDetails = reason;
+            message.LastDeliveryHost = host;
             message.NextAttemptAt = nextAttemptAt;
             message.LastError = reason;
         }
 
-        private static void MarkFailed(QueuedEmail message, string reason)
+        private static void MarkFailed(QueuedEmail message, string reason, string? host)
         {
             message.Status = QueuedEmailStatus.Failed;
+            message.DeliveryStatus = DeliveryStatus.Failed;
+            message.DeliveryDetails = reason;
+            message.LastDeliveryHost = host;
             message.NextAttemptAt = null;
             message.LastError = reason;
         }

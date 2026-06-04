@@ -11,6 +11,9 @@ namespace EmailServer.Models
         public string RecipientsSerialized { get; set; } = string.Empty;
         public string RawMessage { get; set; } = string.Empty;
         public string Status { get; set; } = QueuedEmailStatus.Queued;
+        public string DeliveryStatus { get; set; } = Models.DeliveryStatus.Pending;
+        public string? DeliveryDetails { get; set; }
+        public string? LastDeliveryHost { get; set; }
         public int AttemptCount { get; set; }
         public DateTime? LastAttemptAt { get; set; }
         public DateTime? NextAttemptAt { get; set; }
