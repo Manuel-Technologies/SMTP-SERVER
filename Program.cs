@@ -60,6 +60,25 @@ app.MapPost("/api/tenants/{tenantId}/verification/verify", async (Guid tenantId,
     return verified ? Results.Ok(new { status = "verified" }) : Results.BadRequest(new { status = "failed", message = "DNS record not found or token mismatch." });
 });
 
+app.MapGet("/api/tenants/{tenantId}/authentication", async (Guid tenantId, IDomainVerificationService verificationService) =>
+{
+    var status = await verificationService.GetAuthenticationStatusAsync(tenantId);
+    return status is not null ? Results.Ok(status) : Results.NotFound();
+});
+
+app.MapPost("/api/tenants/{tenantId}/authentication/verify", async (Guid tenantId, IDomainVerificationService verificationService) =>
+{
+    var status = await verificationService.GetAuthenticationStatusAsync(tenantId);
+    if (status is null)
+    {
+        return Results.NotFound();
+    }
+
+    return status.ReadyToSendDirect
+        ? Results.Ok(status)
+        : Results.BadRequest(status);
+});
+
 app.MapPost("/api/send", async (EmailSendRequest request, HttpContext http, IApiKeyValidator apiKeyValidator, ITenantService tenantService, IEmailSender sender, IQuotaService quotaService, EmailServerContext db) =>
 {
     if (request.To is null)

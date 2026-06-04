@@ -48,23 +48,8 @@ namespace EmailServer.Services
                 await _db.SaveChangesAsync();
             }
 
-            var recordName = $"_verify.{tenant.Domain}";
-            IReadOnlyCollection<string> txtRecords;
-
-            try
-            {
-                var response = await _dnsClient.QueryAsync(recordName, QueryType.TXT);
-                txtRecords = response.Answers
-                    .TxtRecords()
-                    .Select(record => string.Concat(record.Text))
-                    .ToList();
-            }
-            catch (DnsResponseException)
-            {
-                return false;
-            }
-
-            if (!txtRecords.Any(record => string.Equals(record.Trim(), tenant.VerificationToken, StringComparison.Ordinal)))
+            var verification = await CheckTxtRecordAsync($"_verify.{tenant.Domain}", tenant.VerificationToken);
+            if (!verification.Found)
             {
                 return false;
             }
@@ -73,6 +58,51 @@ namespace EmailServer.Services
             tenant.DomainVerifiedAt = DateTime.UtcNow;
             await _db.SaveChangesAsync();
             return true;
+        }
+
+        public async Task<DomainAuthenticationStatus?> GetAuthenticationStatusAsync(Guid tenantId)
+        {
+            var tenant = await _db.Tenants.FirstOrDefaultAsync(t => t.Id == tenantId);
+            if (tenant is null)
+            {
+                return null;
+            }
+
+            if (string.IsNullOrWhiteSpace(tenant.VerificationToken))
+            {
+                InitializeVerificationData(tenant);
+                await _db.SaveChangesAsync();
+            }
+
+            var info = BuildVerificationInfo(tenant);
+            var status = new DomainAuthenticationStatus
+            {
+                Domain = tenant.Domain,
+                DomainVerified = tenant.DomainVerified,
+                DomainVerifiedAt = tenant.DomainVerifiedAt,
+                Verification = await CheckTxtRecordAsync(info.VerificationRecordName, info.VerificationRecordValue),
+                Spf = await CheckTxtRecordAsync(info.SpfRecordName, info.SpfRecordValue),
+                Dkim = await CheckTxtRecordAsync(info.DkimRecordName, info.DkimRecordValue),
+                Dmarc = await CheckTxtRecordAsync(info.DmarcRecordName, info.DmarcRecordValue)
+            };
+
+            if (!tenant.DomainVerified && status.Verification.Found)
+            {
+                tenant.DomainVerified = true;
+                tenant.DomainVerifiedAt = DateTime.UtcNow;
+                await _db.SaveChangesAsync();
+
+                status.DomainVerified = true;
+                status.DomainVerifiedAt = tenant.DomainVerifiedAt;
+            }
+
+            status.ReadyToSendDirect =
+                status.DomainVerified &&
+                status.Spf.Found &&
+                status.Dkim.Found &&
+                status.Dmarc.Found;
+
+            return status;
         }
 
         private static void InitializeVerificationData(Tenant tenant)
@@ -100,10 +130,45 @@ namespace EmailServer.Services
                 VerificationRecordName = verificationName,
                 VerificationRecordValue = tenant.VerificationToken,
                 SpfRecordName = spfName,
-                SpfRecordValue = $"v=spf1 mx include:spf.{tenant.Domain} -all",
+                SpfRecordValue = "v=spf1 mx a -all",
                 DkimRecordName = dkimName,
-                DkimRecordValue = $"v=DKIM1; k=rsa; p={tenant.DkimPublicKey}"
+                DkimRecordValue = $"v=DKIM1; k=rsa; p={tenant.DkimPublicKey}",
+                DmarcRecordName = $"_dmarc.{tenant.Domain}",
+                DmarcRecordValue = "v=DMARC1; p=quarantine; adkim=s; aspf=s"
             };
+        }
+
+        private async Task<DnsRecordCheck> CheckTxtRecordAsync(string name, string expectedValue)
+        {
+            var check = new DnsRecordCheck
+            {
+                Name = name,
+                ExpectedValue = expectedValue
+            };
+
+            try
+            {
+                var response = await _dnsClient.QueryAsync(name, QueryType.TXT);
+                check.ActualValues = response.Answers
+                    .TxtRecords()
+                    .Select(record => string.Concat(record.Text).Trim())
+                    .Where(record => !string.IsNullOrWhiteSpace(record))
+                    .ToList();
+
+                check.Found = check.ActualValues.Any(record =>
+                    string.Equals(NormalizeTxt(record), NormalizeTxt(expectedValue), StringComparison.Ordinal));
+            }
+            catch (DnsResponseException ex)
+            {
+                check.Error = ex.Message;
+            }
+
+            return check;
+        }
+
+        private static string NormalizeTxt(string value)
+        {
+            return string.Join(' ', value.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
         }
     }
 }
