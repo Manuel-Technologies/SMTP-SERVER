@@ -8,7 +8,7 @@ This project is a starter C# ASP.NET Core email service with multi-tenant suppor
 - Tenant creation and listing endpoints
 - Send API protected by `X-API-Key`
 - Quota tracking for daily messages
-- SMTP relay using `MailKit`
+- SMTP relay or direct MX lookup delivery using `MailKit`
 - SQLite persistence for tenants and send events
 
 ## Run locally
@@ -63,6 +63,26 @@ GET /api/usage/{tenantId}
 - Update SMTP settings in `appsettings.json` or environment variables
 - The project creates `emails.db` automatically on startup
 - Use `http://localhost:5000/swagger` to explore endpoints
+
+## Outbound delivery
+
+By default, outbound mail is sent through the configured SMTP relay:
+
+```json
+"Smtp": {
+  "Host": "localhost",
+  "Port": 25,
+  "UseSsl": false,
+  "Username": "",
+  "Password": "",
+  "DefaultFrom": "no-reply@example.com",
+  "UseMxLookupDelivery": false,
+  "MxPort": 25,
+  "LocalDomain": "localhost"
+}
+```
+
+Set `UseMxLookupDelivery` to `true` to deliver directly to recipient domains. The sender resolves each domain's MX records, tries hosts in preference order with STARTTLS when available, and falls back to the domain itself if no MX record is found.
 
 ## SMTP submission
 

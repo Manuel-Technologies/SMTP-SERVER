@@ -14,12 +14,8 @@ builder.Services.AddScoped<IEmailSender, EmailSender>();
 builder.Services.AddScoped<IApiKeyValidator, ApiKeyValidator>();
 builder.Services.AddScoped<IQuotaService, QuotaService>();
 builder.Services.AddScoped<IDomainVerificationService, DomainVerificationService>();
-builder.Services.AddHostedService<SmtpSubmissionHostedService>();
-builder.Services.AddHostedService<QueuedEmailWorker>();
 
 builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection("Smtp"));
-builder.Services.Configure<SmtpSubmissionOptions>(builder.Configuration.GetSection("SmtpSubmission"));
-builder.Services.Configure<QueueWorkerOptions>(builder.Configuration.GetSection("QueueWorker"));
 
 var app = builder.Build();
 
@@ -92,12 +88,6 @@ app.MapPost("/api/send", async (EmailSendRequest request, HttpContext http, IApi
 
     var sendRequest = request with { To = recipients };
 
-    var sendResult = await sender.SendAsync(tenant, sendRequest);
-    if (!sendResult)
-    {
-        return Results.StatusCode(502);
-    }
-
     var message = new EmailMessage
     {
         TenantId = tenant.Id,
@@ -111,8 +101,14 @@ app.MapPost("/api/send", async (EmailSendRequest request, HttpContext http, IApi
     await db.EmailMessages.AddAsync(message);
     await db.SaveChangesAsync();
 
+    var sendResult = await sender.SendAsync(tenant, sendRequest);
+    if (!sendResult)
+    {
+        return Results.StatusCode(502);
+    }
+
     await quotaService.RecordSendAsync(tenant, message);
-    return Results.Ok(new { message = "sent", tenantId = tenant.Id, messageId = message.Id });
+    return Results.Ok(new { message = "queued", tenantId = tenant.Id, messageId = message.Id });
 });
 
 app.MapGet("/api/usage/{tenantId}", async (Guid tenantId, ITenantService service, IQuotaService quotaService) =>
@@ -127,32 +123,6 @@ app.MapGet("/api/usage/{tenantId}", async (Guid tenantId, ITenantService service
     return Results.Ok(usage);
 });
 
-app.MapGet("/api/queue", async (EmailServerContext db) =>
-{
-    var messages = await db.QueuedEmails
-        .OrderByDescending(message => message.CreatedAt)
-        .Take(100)
-        .Select(message => new
-        {
-            message.Id,
-            message.TenantId,
-            message.From,
-            Recipients = message.RecipientsSerialized,
-            message.Status,
-            message.AttemptCount,
-            message.LastAttemptAt,
-            message.NextAttemptAt,
-            message.SentAt,
-            message.LastError,
-            message.CreatedAt
-        })
-        .ToListAsync();
-
-    return Results.Ok(messages);
-});
-
 app.MapGet("/api/tenants", async (ITenantService service) => await service.GetTenantsAsync());
 
 app.Run();
-
-public partial class Program { }
