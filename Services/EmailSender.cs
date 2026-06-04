@@ -13,11 +13,16 @@ namespace EmailServer.Services
         private readonly SmtpOptions _options;
         private readonly ILogger<EmailSender> _logger;
         private readonly LookupClient _dnsClient;
+        private readonly IDkimSigningService _dkimSigningService;
 
-        public EmailSender(IOptions<SmtpOptions> options, ILogger<EmailSender> logger)
+        public EmailSender(
+            IOptions<SmtpOptions> options,
+            ILogger<EmailSender> logger,
+            IDkimSigningService dkimSigningService)
         {
             _options = options.Value;
             _logger = logger;
+            _dkimSigningService = dkimSigningService;
             _dnsClient = new LookupClient();
         }
 
@@ -33,6 +38,7 @@ namespace EmailServer.Services
             {
                 var sender = MailboxAddress.Parse(string.IsNullOrWhiteSpace(request.From) ? _options.DefaultFrom : request.From);
                 var recipients = request.To.Select(MailboxAddress.Parse).ToList();
+                _dkimSigningService.Sign(tenant, message);
                 return await DeliverAsync(message, sender, recipients);
             }
             catch (Exception ex)
@@ -60,6 +66,7 @@ namespace EmailServer.Services
 
                 var sender = MailboxAddress.Parse(string.IsNullOrWhiteSpace(queuedEmail.From) ? _options.DefaultFrom : queuedEmail.From);
 
+                _dkimSigningService.Sign(tenant, message);
                 return await DeliverAsync(message, sender, recipients);
             }
             catch (Exception ex)

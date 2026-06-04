@@ -15,10 +15,12 @@ builder.Services.AddScoped<IEmailSender, EmailSender>();
 builder.Services.AddScoped<IApiKeyValidator, ApiKeyValidator>();
 builder.Services.AddScoped<IQuotaService, QuotaService>();
 builder.Services.AddScoped<IDomainVerificationService, DomainVerificationService>();
+builder.Services.AddScoped<IDkimSigningService, DkimSigningService>();
 builder.Services.AddHostedService<SmtpSubmissionHostedService>();
 builder.Services.AddHostedService<QueuedEmailWorker>();
 
 builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection("Smtp"));
+builder.Services.Configure<DkimOptions>(builder.Configuration.GetSection("Dkim"));
 builder.Services.Configure<SmtpSubmissionOptions>(builder.Configuration.GetSection("SmtpSubmission"));
 builder.Services.Configure<QueueWorkerOptions>(builder.Configuration.GetSection("QueueWorker"));
 
